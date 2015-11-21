@@ -2,56 +2,164 @@ from pyspark import  SparkContext, SparkConf
 from pyspark.sql.types import *
 from pyspark.sql import SQLContext
 import pandas as pd
-from pyspark.ml.feature import RFormula
-from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.feature import RFormula, StringIndexer
+from pyspark.ml.classification import LogisticRegression, DecisionTreeClassifier
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
+from pyspark.ml.tuning import ParamGridBuilder, CrossValidator
 
 """
 File to be run in pyspark :
 execfile('path_to_file/file.py')
 """
 
-# load data in pandas dataFrame
-data = pd.read_csv('/home/maxime/kaggle_data/titanic/train.csv')
-print data.head()
 
-# create a SQLContext with the sparkContext 'sc' in pyspark
-sqlc = SQLContext(sc)
+def load_data(path):
+    # load data in pandas dataFrame
+    data = pd.read_csv(path)
+    print data.head()
 
-# create a pyspark dataFrame from the pandas df
-df = sqlc.createDataFrame(data)
+    # create a SQLContext with the sparkContext 'sc' in pyspark
+    sqlc = SQLContext(sc)
 
-# preparing the dataset
-df = df.drop('Cabin')
-df = df.drop('Ticket')
-df = df.drop('Name')
-df = df.drop('PassengerId')
+    # create a pyspark dataFrame from the pandas df
+    df = sqlc.createDataFrame(data)
 
-dfnoNaN = df.dropna()
+    return df
 
-avg_age = dfnoNaN.groupby().avg('Age').collect()[0][0]
-print "avg(age) = ", avg_age
-df = df.fillna(avg_age,subset=['Age'])
+def data_preparation(df, avg_age,feat_name="features",lab_name='label'):
+
+    df = df.fillna(avg_age,subset=['Age'])
+
+    """
+    ## unnecessary when using Rformula
+    df = df.replace(['male','female'],['-1','1'],'Sex')
+    df = df.withColumn('Sex',df.Sex.cast('int'))
+
+    df = df.replace(['S','Q','C'],['-1','0','1'],'Embarked')
+    df = df.withColumn('Embarked',df.Embarked.cast('int'))
+    df.printSchema()
+    """
+
+    # Rformula automatically formats categorical data (Sex and Embarked) into numerical data
+    formula = RFormula(formula="Survived ~ Sex + Age + Pclass + Fare",
+        featuresCol=feat_name,
+        labelCol=lab_name)
+
+    df = formula.fit(df).transform(df)
+    df.show(truncate=False)
+
+    return df
+
+def find_avg_age(df):
+    df = df.drop('Cabin')
+    df = df.drop('Ticket')
+    df = df.drop('Name')
+    df = df.drop('PassengerId')
+
+    # filling missing value in Age with the average age
+    dfnoNaN = df.dropna()
+    avg_age = dfnoNaN.groupby().avg('Age').collect()[0][0]
+    print "avg(age) = ", avg_age
+
+    return avg_age
+
+def buil_lrmodel(path):
+
+    df = load_data(path)
+
+    #-------------------- preparing the dataset -------------------------------------------
+
+    avg_age = find_avg_age(df)
+    df = data_preparation(df, avg_age)
+
+    print "count = " , df.count()
 
 
-df = df.replace(['male','female'],['-1','1'],'Sex')
-df = df.withColumn('Sex',df.Sex.cast('int'))
+    #------------------ Build a model ----------------------------------------------------
+    lr = LogisticRegression(maxIter=10, regParam=0.01)
+    model = lr.fit(df)
 
-df = df.replace(['S','Q','C'],['-1','0','1'],'Embarked')
-df = df.withColumn('Embarked',df.Embarked.cast('int'))
-df.printSchema()
+    prediction = model.transform(df)
+    prediction.show(truncate=False)
 
-formula = RFormula(formula="Survived ~ Sex + Age + Pclass + Fare + SibSp + Parch",featuresCol="features",labelCol="label")
-df = formula.fit(df).transform(df)
-df.show()
-
-print "count = " , df.count()
+    evaluator = BinaryClassificationEvaluator()
+    print "classification evaluation :" , evaluator.evaluate(prediction)
 
 
-# Build the model
-lr = LogisticRegression(maxIter=10, regParam=0.01)
-model = lr.fit(df)
+    #-------------- selecting models with cross validation -----------------------------------
+    lr = LogisticRegression()
+    grid = ParamGridBuilder().addGrid(lr.maxIter, [1,10,50,150,200,500,1000])\
+                            .addGrid(lr.regParam, [0.01, 0.05, 0.1,]).build()
+    cv = CrossValidator(estimator=lr, estimatorParamMaps=grid, evaluator=evaluator)
+    cvModel = cv.fit(df)
 
-prediction = model.transform(df)
+    prediction = cvModel.transform(df)
+    prediction.show(truncate=False)
 
-prediction.show(truncate=False)
+    print "classification evaluation :" , evaluator.evaluate(prediction)
+
+
+    return cvModel,avg_age
+
+def build_decisionTree(path):
+
+    df = load_data(path)
+    avg_age=find_avg_age(df)
+    df = data_preparation(df, avg_age)
+
+    df = df.drop('Cabin')
+    df = df.drop('Ticket')
+    df = df.drop('Name')
+
+    stringIndexer = StringIndexer(inputCol="Survived", outputCol="indexed")
+    si_model = stringIndexer.fit(df)
+    df = si_model.transform(df)
+    df.show(truncate=False)
+
+    dt = DecisionTreeClassifier(labelCol='indexed')
+    grid = ParamGridBuilder().addGrid(dt.maxDepth, [1,5,10]).build()
+
+    evaluator = BinaryClassificationEvaluator()
+    cv = CrossValidator(estimator=dt, estimatorParamMaps=grid, evaluator=evaluator)
+    cvModel = cv.fit(df)
+
+    prediction = cvModel.transform(df)
+    prediction.show(truncate=False)
+
+    print "classification evaluation :" , evaluator.evaluate(prediction)
+
+    return cvModel,avg_age
+
+def apply_onTest(model,avg_age,path):
+
+    df = load_data(path)
+
+    df = df.drop('Cabin')
+    df = df.drop('Ticket')
+    df = df.drop('Name')
+
+    df = data_preparation(df, avg_age)
+
+    print "count = " , df.count()
+
+    prediction = model.transform(df)
+    prediction.show(truncate=False)
+
+    return prediction
+
+
+if __name__ == "__main__":
+
+    path = '/home/maxime/kaggle/spark.ml-training-on-titanic-dataset/'
+
+    #model,mean_age = buil_lrmodel(path+'data/train.csv')
+    model,mean_age = build_decisionTree(path+'data/train.csv')
+    df = apply_onTest(model,mean_age,path+'data/test.csv')
+
+    df = df.select('PassengerId','prediction')
+    df = df.withColumnRenamed('prediction','Survived')
+    df.show()
+
+    df = df.toPandas()
+
+    df.to_csv(path+'results.csv',index=False)
