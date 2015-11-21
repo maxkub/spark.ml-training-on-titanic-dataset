@@ -3,7 +3,7 @@ from pyspark.sql.types import *
 from pyspark.sql import SQLContext
 import pandas as pd
 from pyspark.ml.feature import RFormula, StringIndexer
-from pyspark.ml.classification import LogisticRegression, DecisionTreeClassifier
+from pyspark.ml.classification import LogisticRegression, DecisionTreeClassifier, GBTClassifier, RandomForestClassifier
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.tuning import ParamGridBuilder, CrossValidator
 import matplotlib.pyplot as plt
@@ -121,7 +121,7 @@ def build_decisionTree(path):
     df.show(truncate=False)
 
     dt = DecisionTreeClassifier(labelCol='indexed')
-    grid = ParamGridBuilder().addGrid(dt.maxDepth, [1,5,10]).build()
+    grid = ParamGridBuilder().addGrid(dt.maxDepth, [1,2,3,5,6,8,10]).build()
 
     evaluator = BinaryClassificationEvaluator()
     cv = CrossValidator(estimator=dt, estimatorParamMaps=grid, evaluator=evaluator)
@@ -133,6 +133,36 @@ def build_decisionTree(path):
     print "classification evaluation :" , evaluator.evaluate(prediction)
 
     return cvModel,avg_age
+
+def build_randomForest(path):
+    df = load_data(path)
+    avg_age=find_avg_age(df)
+    df = data_preparation(df, avg_age)
+
+    df = df.drop('Cabin')
+    df = df.drop('Ticket')
+    df = df.drop('Name')
+
+    stringIndexer = StringIndexer(inputCol="Survived", outputCol="indexed")
+    si_model = stringIndexer.fit(df)
+    df = si_model.transform(df)
+    df.show()
+
+    rdf = RandomForestClassifier(labelCol='indexed')
+    grid = ParamGridBuilder().addGrid(rdf.maxDepth, [1,2,3,5,6,8,10])\
+                            .addGrid(rdf.numTrees,[1,5,10,30,50,100,200]).build()
+
+    evaluator = BinaryClassificationEvaluator()
+    cv = CrossValidator(estimator=rdf, estimatorParamMaps=grid, evaluator=evaluator)
+    cvModel = rdf.fit(df)
+
+    prediction = cvModel.transform(df)
+    prediction.show()
+
+    print "classification evaluation :" , evaluator.evaluate(prediction)
+
+    return cvModel,avg_age
+
 
 def apply_onTest(model,avg_age,path):
 
@@ -157,7 +187,8 @@ if __name__ == "__main__":
     path = '/home/maxime/kaggle/spark.ml-training-on-titanic-dataset/'
 
     #model,mean_age = buil_lrmodel(path+'data/train.csv')
-    model,mean_age = build_decisionTree(path+'data/train.csv')
+    #model,mean_age = build_decisionTree(path+'data/train.csv')
+    model,mean_age = build_randomForest(path+'data/train.csv')
     df = apply_onTest(model,mean_age,path+'data/test.csv')
 
     df = df.select('PassengerId','prediction')
