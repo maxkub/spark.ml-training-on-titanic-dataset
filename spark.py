@@ -6,6 +6,7 @@ from pyspark.ml.feature import RFormula, StringIndexer
 from pyspark.ml.classification import LogisticRegression, DecisionTreeClassifier
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.tuning import ParamGridBuilder, CrossValidator
+import matplotlib.pyplot as plt
 
 """
 File to be run in pyspark :
@@ -41,7 +42,7 @@ def data_preparation(df, avg_age,feat_name="features",lab_name='label'):
     """
 
     # Rformula automatically formats categorical data (Sex and Embarked) into numerical data
-    formula = RFormula(formula="Survived ~ Sex + Age + Pclass + Fare",
+    formula = RFormula(formula="Survived ~ Sex + Age + Pclass + Fare + SibSp + Parch",
         featuresCol=feat_name,
         labelCol=lab_name)
 
@@ -74,6 +75,9 @@ def buil_lrmodel(path):
 
     print "count = " , df.count()
 
+    df = df.drop('Cabin')
+    df = df.drop('Ticket')
+    df = df.drop('Name')
 
     #------------------ Build a model ----------------------------------------------------
     lr = LogisticRegression(maxIter=10, regParam=0.01)
@@ -161,5 +165,19 @@ if __name__ == "__main__":
     df.show()
 
     df = df.toPandas()
-
+    df['Survived']=df['Survived'].astype('int')
     df.to_csv(path+'results.csv',index=False)
+
+    result = pd.read_csv(path+'data/genderclassmodel.csv')
+    result.rename(columns={'Survived':'target','PassengerId':'Id'},inplace=True)
+    df_comp = pd.concat([df, result], axis=1, join='inner')
+
+    df_comp['diff']=df_comp.Survived - df_comp.target
+    print df_comp.head()
+
+
+    ax = df_comp.plot(kind='scatter', x='Id', y='target',color='r',s=100,label='target')
+    df_comp.plot(kind='scatter',x='PassengerId',y='Survived',ax=ax,color='b',label='prediction')
+
+    df_comp.plot(kind='scatter',x='PassengerId',y='diff')
+    plt.show()
